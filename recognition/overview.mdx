@@ -1,0 +1,81 @@
+---
+title: "Sign recognition"
+description: "Capture hand signs through the camera and translate them into text"
+---
+
+Sign recognition lets users sign to the camera and see the predicted word as
+text. It powers the "signs → text" direction of the translator and is the
+default landing experience for users who registered with the **Mudo**
+(non-speaking) accessibility profile.
+
+## How it works
+
+Recognition runs as a two-stage pipeline split between the browser and the
+server:
+
+1. **In the browser.** The camera view loads MediaPipe HandLandmarker
+   (`hand_landmarker.task`) and detects up to two hands per frame. Hand
+   landmarks are extracted client-side so raw video never has to leave the
+   user's device.
+2. **On the server.** Landmark sequences are POSTed to the recognition
+   endpoint, normalized to a fixed length of 30 frames, recentered around the
+   hand centroid, and scored against a scikit-learn RandomForest classifier
+   loaded from `model_seq.pkl`. The top class and its confidence are returned
+   as JSON.
+
+A separate, lightweight endpoint also detects whether *any* hand is visible
+in a frame, throttled to roughly 8 requests per second per session. The
+camera UI uses it to show a "no hand detected" indicator without spending
+prediction cycles.
+
+## User flow
+
+<Steps>
+  <Step title="Sign in">
+    Users with the **Mudo** disability profile are redirected straight to
+    `/reconocimientos/camara/` after sign-in. Any other user can open the
+    same page from the translator.
+  </Step>
+  <Step title="Grant camera access">
+    The page asks the browser for camera permission and starts streaming
+    frames into MediaPipe locally.
+  </Step>
+  <Step title="Sign a word">
+    Hold the sign in front of the camera. Once at least five frames with
+    visible landmarks are captured, the client sends the sequence to the
+    server and shows the predicted label with its confidence score.
+  </Step>
+</Steps>
+
+## Prediction response
+
+The recognition endpoint returns a JSON payload similar to:
+
+```json
+{
+  "ok": true,
+  "label": "hola",
+  "confidence": 0.87
+}
+```
+
+If no model has been trained yet, the endpoint responds with HTTP `503` and
+an error message:
+
+```json
+{
+  "error": "Modelo no entrenado aún. Entrena desde el panel admin."
+}
+```
+
+This is expected on a fresh deployment — recognition stays unavailable until
+a superuser uploads training samples and runs the trainer at least once. See
+[Train the recognition model](/recognition/admin-training) for the admin
+workflow.
+
+## Vocabulary
+
+The classifier only recognizes labels it has been trained on. To extend the
+vocabulary, add new `VideoSeña` samples from the admin panel and retrain.
+The list of currently recognized signs (and per-class accuracy on the stored
+dataset) is available to admins on the **Señas entrenadas** page.
