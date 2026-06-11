@@ -1,0 +1,172 @@
+---
+title: "Local installation"
+description: "Complete guide to installing and configuring Signia on your machine, including database, static files, and known gotchas."
+---
+
+This guide walks through a complete local installation of Signia, including the optional pieces (PostgreSQL, email, `collectstatic`) that the [Quickstart](/quickstart) skips. Use it as a reference when standing up a new development environment or preparing a staging deployment.
+
+## Prerequisites
+
+| Tool | Minimum version | Notes |
+| --- | --- | --- |
+| Python | 3.11 | Older versions are not supported. |
+| pip | 23+ | Ships with Python. |
+| Git | any | For cloning the repository. |
+| `ffmpeg` | any | Optional — the repo ships binaries under `ffmpeg/`. |
+
+<Note>
+  The `ffmpeg/` directory in the repository contains native binaries for Windows and Linux. The translator (`traduccion/views.py`) prepends that folder to the process `PATH` at runtime, so you do **not** need a system-wide `ffmpeg` for local development. Do not delete or move the `ffmpeg/` directory.
+</Note>
+
+## 1. Clone the repository
+
+```bash
+git clone <repository-url>
+cd SIGNIA
+```
+
+## 2. Create a virtual environment
+
+Isolate Signia's dependencies from your system Python.
+
+<CodeGroup>
+
+```bash Linux / macOS
+python3.11 -m venv ENT
+source ENT/bin/activate
+```
+
+```powershell Windows (PowerShell)
+python -m venv ENT
+.\ENT\Scripts\Activate.ps1
+```
+
+</CodeGroup>
+
+When the environment is active, your shell prompt should be prefixed with `(ENT)`.
+
+## 3. Install Python dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+This installs Django 5.2, `django-allauth`, `faster-whisper`, `mediapipe`, `scikit-learn`, the `groq` client, `psycopg2-binary`, `gunicorn`, `whitenoise`, `dj-database-url`, and `python-decouple`, among others.
+
+## 4. Configure environment variables
+
+Create a `.env` file in the project root, alongside `manage.py`:
+
+```env
+# Django
+SECRET_KEY=replace-with-a-long-random-string
+DEBUG=True
+
+# Database (optional — omit to use the bundled SQLite file)
+# DATABASE_URL=postgresql://user:password@host.neon.tech/signia?sslmode=require
+
+# LSC grammar (required)
+GROQ_API_KEY=your-groq-api-key
+
+# Email (Brevo)
+EMAIL_HOST_USER=your-verified-sender@example.com
+EMAIL_HOST_PASSWORD=your-app-password-or-blank
+```
+
+### Variable reference
+
+| Variable | Required | Description |
+| --- | --- | --- |
+| `SECRET_KEY` | Yes | Django cryptographic signing key. Generate with `python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"`. |
+| `DEBUG` | Yes | `True` for local development, `False` everywhere else. |
+| `DATABASE_URL` | No | PostgreSQL connection string (for example, a Neon URL ending in `?sslmode=require`). When unset, Signia falls back to `db.sqlite3` in the project root. |
+| `GROQ_API_KEY` | Yes | API key from [console.groq.com](https://console.groq.com). Powers the LSC grammar conversion in `lsc_grammar.py`. |
+| `EMAIL_HOST_USER` | For email | Sender address used for OTP, welcome, and password-reset messages. Must be verified in Brevo. |
+| `EMAIL_HOST_PASSWORD` | For email | App password for the sender. Leave blank if you rely solely on the Brevo backend in `usuarios/email_backend.py`. |
+
+<Tip>
+  Treat `.env` as a secret. It is gitignored — never commit it.
+</Tip>
+
+## 5. Apply database migrations
+
+### Option A — SQLite (default for local development)
+
+If `DATABASE_URL` is not set, Signia uses the bundled `db.sqlite3` automatically. Just run:
+
+```bash
+python manage.py migrate
+```
+
+### Option B — PostgreSQL (Neon recommended)
+
+1. Create a project at [neon.tech](https://neon.tech).
+2. Copy the connection string into `DATABASE_URL` in your `.env`. The string must end in `?sslmode=require` — Signia configures `sslmode=require` in `DATABASES['default']['OPTIONS']`, and Neon refuses non-SSL connections.
+3. Run migrations:
+
+   ```bash
+   python manage.py migrate
+   ```
+
+### Create an admin user
+
+```bash
+python manage.py createsuperuser
+```
+
+The superuser can sign in at `/django-admin/` and at the project-specific video admin (`/admin-videos/`), which is where you upload sign videos and retrain the recognition model.
+
+## 6. Collect static files
+
+In development, Django serves static files automatically. If you want to mirror the production setup or test WhiteNoise locally, run:
+
+```bash
+python manage.py collectstatic --no-input
+```
+
+Output is written to `staticfiles/` and served by WhiteNoise.
+
+<Warning>
+  Keep `STATICFILES_STORAGE` (or the modern `STORAGES["staticfiles"]["BACKEND"]`) set to `whitenoise.storage.CompressedStaticFilesStorage`. Do **not** switch to `CompressedManifestStaticFilesStorage`.
+
+  MediaPipe loads its `.wasm` workers by their original file names. The Manifest backend rewrites every static asset with a content-hash suffix, which breaks MediaPipe's loader and makes the camera/recognition page fail silently in the browser.
+</Warning>
+
+## 7. Run the development server
+
+```bash
+python manage.py runserver
+```
+
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
+
+### Key routes
+
+| Path | Description |
+| --- | --- |
+| `/` | Home page. |
+| `/login/`, `/registro/` | Sign in and sign up. |
+| `/traduccion/` | Text or audio → LSC video translator. |
+| `/reconocimientos/camara/` | Camera → text recognition (requires a trained model). |
+| `/admin-videos/` | Superuser-only panel for managing the sign-video library and retraining. |
+| `/django-admin/` | Native Django admin. |
+
+## Common gotchas
+
+<AccordionGroup>
+  <Accordion title="Recognition endpoint returns 503">
+    The RandomForest classifier file (`reconocimientos/modelo/model_seq.pkl`) does not exist yet. Sign in as a superuser, upload sign videos at `/admin-videos/`, and click **Train model**. The training thread also deletes the source videos from disk and the database when it finishes — that is intentional.
+  </Accordion>
+  <Accordion title="MediaPipe fails to load in the browser">
+    Almost always caused by switching the static files backend to `CompressedManifestStaticFilesStorage`. Revert to `CompressedStaticFilesStorage` and re-run `collectstatic`. WhiteNoise is already configured to skip compressing `.wasm`, so you should not need to change anything else.
+  </Accordion>
+  <Accordion title="“SSL required” when connecting to PostgreSQL">
+    Append `?sslmode=require` to your `DATABASE_URL`. Neon refuses plaintext connections, and Signia also sets `sslmode=require` in `DATABASES['default']['OPTIONS']`.
+  </Accordion>
+  <Accordion title="`ffmpeg` not found during audio translation">
+    The `ffmpeg/` directory was moved or deleted. Restore it from the repository — `traduccion/views.py` prepends that folder to `PATH` so Whisper can find the binary without a system-wide install.
+  </Accordion>
+  <Accordion title="Emails never arrive">
+    Confirm that `EMAIL_HOST_USER` matches a sender you have verified in Brevo, and that the Brevo API key referenced by `usuarios/email_backend.py` is active. Check Django's console output for the exact error returned by the Brevo API.
+  </Accordion>
+</AccordionGroup>
