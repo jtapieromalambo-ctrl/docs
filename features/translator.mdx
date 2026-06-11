@@ -1,0 +1,91 @@
+---
+title: "Translator"
+description: "Convert Spanish text or audio into Colombian Sign Language (LSC) video"
+---
+
+The translator turns Spanish input — typed text or recorded audio — into a sequence of Colombian Sign Language (LSC) video clips. It pairs a speech-to-text step with an AI grammar layer that reorders words into LSC gloss order, then plays back the matching sign videos from the catalog.
+
+## When to use it
+
+Use the translator when you need to communicate a Spanish message in LSC. It's designed for hearing users who want to address Deaf signers, classroom and reception scenarios, and any context where a quick text-to-signs rendering is helpful.
+
+## Access
+
+The translator lives at `/traductor/` and requires an authenticated account.
+
+After login, Signia routes users based on the disability declared on their profile:
+
+- **No disability selected** — redirected to the translator (text/audio → signs).
+- **Sordo or mudo** — redirected to the sign recognition tool (signs → text) instead. These users can still reach the translator through direct navigation.
+
+If a user has not chosen a profile option yet, they are first sent to `/seleccionar-discapacidad/` and then routed accordingly.
+
+## Input modes
+
+The translator accepts two kinds of input on the same page:
+
+<Tabs>
+  <Tab title="Text">
+    Type a Spanish phrase into the input field and submit it. The text is sent directly to the LSC grammar layer.
+  </Tab>
+  <Tab title="Audio">
+    Record or upload an audio clip. The clip is transcribed locally with `faster-whisper` (base model, Spanish) before being passed to the grammar layer. Very short or empty clips are discarded.
+  </Tab>
+</Tabs>
+
+Recognized translations are saved to the signed-in user's history.
+
+## How a translation is produced
+
+<Steps>
+  <Step title="Transcribe (audio only)">
+    Audio uploads are transcribed to Spanish text with `faster-whisper`. Typed input skips this step.
+  </Step>
+  <Step title="Convert to LSC gloss order">
+    The Spanish text is sent to the LSC grammar layer, which calls the Groq API with a linguist-style system prompt and returns the tokens reordered into LSC syntax (for example, `YO ARROZ COMER`). The response also includes sentence type, facial expression, and notes.
+  </Step>
+  <Step title="Match videos">
+    Each token is looked up in the video catalog. The lookup tries multi-token phrases first (up to three contiguous tokens) before falling back to single tokens, so compound signs like `con gusto` resolve to a single clip.
+  </Step>
+  <Step title="Play back">
+    The matched clips play in LSC order. A neutral `base` clip is shown as the idle/reference video.
+  </Step>
+</Steps>
+
+## Grammar layer and model fallback
+
+The grammar layer is implemented around the Groq API and tries a chain of four models in order, so a rate limit or outage on one model does not break the feature:
+
+1. `llama-3.3-70b-versatile` — primary, best LSC quality.
+2. `llama-3.1-8b-instant` — faster fallback with an independent quota.
+3. `llama3-8b-8192` — stable Llama 3 base.
+4. `llama3-70b-8192` — Llama 3 70B base.
+
+If all four models fail (or no API key is configured), the translator returns a basic heuristic gloss so the page still produces output. The response includes a `modelo_usado` field that records which model handled the request, or `fallback` / `none` when no model was reachable. Grammar responses are cached for 30 minutes per input.
+
+## Configuration
+
+Set the `GROQ_API_KEY` environment variable before starting the server. Without it, every request falls through to the basic heuristic and the rendered gloss will be much less accurate.
+
+```bash
+export GROQ_API_KEY="your_groq_api_key"
+```
+
+The key can also be set in `settings.py`:
+
+```python
+import os
+os.environ["GROQ_API_KEY"] = "your_groq_api_key"
+```
+
+For audio input, the bundled `ffmpeg` binaries are added to `PATH` automatically; no extra configuration is needed.
+
+## Missing signs
+
+When a token has no matching clip in the catalog, it is surfaced in the response as a "missing" candidate so you know which signs to record next. For each missing token the grammar layer suggests one of two strategies:
+
+- **`synonym:<ALTERNATIVE>`** — try a related sign that does exist (for example, swap an uncommon verb for a near-synonym already in the catalog). The translator retries the lookup against the alternative before giving up.
+- **`spell`** — fingerspell the word letter by letter.
+- **`record`** — the sign is missing entirely and should be recorded to expand the catalog.
+
+The page exposes the full list of LSC tokens, per-token resolution info (which video was used, original vs. used token, strategy applied), and the raw `faltantes` list so administrators can prioritize new recordings.
