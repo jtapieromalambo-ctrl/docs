@@ -1,20 +1,59 @@
 ---
 title: "Introduction"
-description: "Welcome to your project"
+description: "Two-way Colombian Sign Language (LSC) translation on the web"
 ---
 
-Write a short description of your product here. What it does, who it's for, and what they can accomplish with it.
+Signia is a web application for translating between Spanish and **Colombian Sign Language (LSC)**. It is designed for deaf and mute users in Colombia, and gives each user a tailored experience based on the disability they select after logging in.
 
-<Tip>
-  Ready to make this your own? Start by editing this page. Update your `docs.json` file to customize your site. Then fill out the [Quickstart](/quickstart) page.
-</Tip>
+## What Signia does
 
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  This card links to the quickstart page in your project.
-</Card>
-<Card title="Components" icon="puzzle-piece" href="https://mintlify.com/docs/components">
-  Add cards, callouts, steps, tabs, and more to design and structure your pages.
-</Card>
-<Card title="Settings" icon="gear" href="https://mintlify.com/docs/organize/settings">
-  Set your site name, branding, and navigation in the `docs.json` file.
-</Card>
+Signia provides two complementary translation flows in a single app:
+
+<CardGroup cols={2}>
+  <Card title="Spanish → LSC video" icon="hand">
+    Type or speak in Spanish and Signia returns a sequence of LSC sign videos. Speech is transcribed with Whisper, the sentence is re-ordered into LSC gloss order by an LLM grammar layer, and matching sign clips are stitched into a single video.
+  </Card>
+  <Card title="LSC → Spanish text" icon="camera">
+    Sign in front of your camera and Signia detects your hand landmarks in real time and predicts the corresponding Spanish word, building up phrases as you sign.
+  </Card>
+</CardGroup>
+
+## Who Signia is for
+
+Signia is built around an accessibility-first onboarding flow:
+
+- **Deaf users (`sordo`)** are routed to the Spanish → LSC translator so they can read what hearing people say.
+- **Mute users (`mudo`)** are routed to the camera-based sign recognizer so they can be understood by hearing people.
+- **Hearing users and administrators** can use both flows, manage the sign-video catalog, and retrain the recognition model.
+
+Every account also gets a per-user **history** of translations and recognitions, so users can revisit past conversations.
+
+## How it works
+
+Signia is a Django 5.2 web app backed by PostgreSQL. It is organized around four feature areas:
+
+| Area              | Purpose                                                                 |
+| ----------------- | ----------------------------------------------------------------------- |
+| **Users**         | Email + OTP registration, Google/Facebook OAuth, profile, contact form. |
+| **Translation**   | Spanish text or audio → LSC gloss → stitched sign video.                |
+| **Recognition**   | Webcam hand landmarks → predicted Spanish word.                         |
+| **History**       | Per-user log of translations and recognitions.                          |
+
+Under the hood, Signia combines several open-source building blocks:
+
+- **Whisper** (via `faster-whisper` and a bundled `ffmpeg`) for Spanish speech-to-text.
+- **Groq-hosted Llama models** for converting Spanish sentences into LSC gloss order, with a rule-based fallback if the API is unavailable.
+- **MediaPipe HandLandmarker** in the browser for extracting hand-landmark sequences from the user's camera.
+- **scikit-learn RandomForest** for classifying landmark sequences into Spanish words, retrained from sign videos uploaded through the admin panel.
+- **PostgreSQL (Neon)** for users, sign-video metadata, and history.
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Run Signia locally and translate your first Spanish phrase into LSC.
+  </Card>
+  <Card title="Sign in with Signia" icon="user" href="/quickstart">
+    Learn the post-login disability selection flow and how it personalizes the app.
+  </Card>
+</CardGroup>
