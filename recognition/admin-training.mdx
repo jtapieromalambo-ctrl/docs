@@ -1,0 +1,121 @@
+---
+title: "Train the recognition model"
+description: "Upload sign videos and retrain the RandomForest classifier from the admin panel"
+---
+
+Sign recognition is backed by a scikit-learn RandomForest classifier that
+ships empty on a fresh deployment. Superusers train and extend it from the
+admin video panel by uploading short sample videos of each sign and clicking
+**Entrenar**.
+
+<Warning>
+  Training **deletes every uploaded sample from the database and from disk
+  once it finishes successfully.** The trained model and the accumulated
+  feature dataset are kept, but the source videos are not. Back them up
+  elsewhere if you need to retrain from scratch later.
+</Warning>
+
+## Prerequisites
+
+- A Django superuser account.
+- Short clips (a few seconds each) of a single person performing one sign
+  per video, recorded against a reasonably clean background.
+- Enough memory and CPU on the server to run MediaPipe and fit a 500-tree
+  RandomForest. Training is CPU-bound and uses all available cores.
+
+## Open the admin panel
+
+Sign in as a superuser and go to `/reconocimientos/admin-videos/`. The page
+lists every pending `VideoSeña` sample grouped by label, along with controls
+to upload, edit, and delete samples for both the recognition model and the
+text-to-sign translator catalog.
+
+## Upload training samples
+
+For each sign you want the model to learn:
+
+<Steps>
+  <Step title="Record a clip">
+    Capture the sign from start to finish. Keep both hands inside the frame
+    and avoid cutting off motion at the edges.
+  </Step>
+  <Step title="Add a sample">
+    From the admin panel, choose **Subir** under *Reconocimiento*, type the
+    label (for example `hola`), and select the video file.
+  </Step>
+  <Step title="Repeat per label">
+    Add several clips per label whenever possible. More samples per class
+    materially improve accuracy.
+  </Step>
+</Steps>
+
+## Run training
+
+Click **Entrenar** in the admin panel. The server responds immediately
+with `{"ok": true}` and kicks off the actual work in a background daemon
+thread inside the Django process.
+
+```json
+POST /reconocimientos/admin-videos/entrenar/
+→ { "ok": true }
+```
+
+Poll the status endpoint to know when it finishes:
+
+```json
+GET /reconocimientos/admin-videos/entrenar/estado/
+→ { "entrenando": true }
+```
+
+While `entrenando` is `true`, a second click on **Entrenar** is rejected so
+two training jobs never run in parallel.
+
+### What happens during training
+
+The background task processes every pending `VideoSeña`, then trains and
+saves a new classifier:
+
+1. **Landmark extraction.** Each video is decoded with OpenCV and every
+   frame is passed through MediaPipe HandLandmarker. Up to two hands per
+   frame are kept, padded to a fixed feature width, and recentered around
+   the hand centroid so position on screen doesn't matter.
+2. **Data augmentation.** Each clip is expanded into 8 variations — the
+   original plus added Gaussian noise (two intensities), random scale,
+   resampled playback speed, horizontal mirror, random translation, and a
+   time-reversed copy. This makes the model more robust to camera
+   distance, dominant hand, and tempo.
+3. **Dataset accumulation.** Newly extracted features are concatenated with
+   any previously saved dataset (`X_seq.npy` / `y_seq.npy`) so each
+   training run extends the vocabulary instead of replacing it.
+4. **Model fit.** A new `RandomForestClassifier` with 500 trees,
+   `class_weight='balanced'`, and `n_jobs=-1` is fit on the combined
+   dataset, then pickled to `model_seq.pkl` alongside its `LabelEncoder`.
+5. **Cleanup.** Every `VideoSeña` row is deleted and the underlying video
+   file is removed from disk. The accumulated dataset and the new model
+   are kept so the next training run can build on top of them.
+
+Once the new model is written to disk, the running Django process swaps it
+in memory and recognition immediately starts returning predictions for the
+new labels — no restart needed.
+
+## Inspect and prune trained signs
+
+Open `/reconocimientos/admin-videos/senas-entrenadas/` to see every label
+the current model recognizes along with its accuracy on the stored dataset.
+Use the **Eliminar** action there to drop a label from the model: the
+server removes all of its samples from the accumulated dataset and refits
+the RandomForest on what remains.
+
+## Operational notes
+
+- **Run training off-hours.** It executes inside the Django worker
+  process, so the host's CPU will be saturated until it finishes.
+- **One process at a time.** The `_entrenando` flag and the trained model
+  live in Python module state. On a multi-process deployment (Gunicorn
+  with several workers), only the worker that ran the training sees the
+  new model in memory until each other worker reloads `model_seq.pkl`.
+  Restart the app, or send a fresh request that triggers
+  `_cargar_modelo`, to propagate the new model everywhere.
+- **First training unlocks recognition.** Until at least one successful
+  training run produces `model_seq.pkl` and `encoder_seq.pkl`, the
+  prediction endpoints return HTTP `503`.
