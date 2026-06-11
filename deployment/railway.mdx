@@ -1,0 +1,168 @@
+---
+title: "Deploy to Railway"
+description: "Production deployment guide for running the Django application on Railway with Nixpacks, Neon PostgreSQL, and WhiteNoise."
+---
+
+This guide walks through deploying the application to [Railway](https://railway.app) using Nixpacks. Railway detects the Python runtime, installs system dependencies declared in `nixpacks.toml`, runs the build script, and starts the app from the `Procfile`.
+
+Use this guide when you are setting up a fresh Railway service, migrating from another host, or troubleshooting a production deploy.
+
+## Prerequisites
+
+Before you begin, you must have:
+
+- A Railway account and a new project linked to the application repository.
+- A [Neon](https://neon.tech) PostgreSQL database (or any managed Postgres) with a connection string.
+- Credentials for Brevo (transactional email) and Groq (LSC grammar layer).
+- OAuth client credentials for Google and Facebook if you use social login.
+
+## How Railway builds the app
+
+Railway uses Nixpacks to assemble the image. Three files at the repo root drive the build:
+
+<Steps>
+  <Step title="System packages — nixpacks.toml">
+    Nixpacks installs the apt packages needed by OpenCV, MediaPipe, and FFmpeg-based video processing during the `setup` phase:
+
+    ```toml nixpacks.toml
+    [phases.setup]
+    aptPkgs = ["libgl1", "libglib2.0-0", "libgl1-mesa-glx", "ffmpeg"]
+    ```
+
+    Without these, image and video pipelines fail at runtime with missing shared libraries (`libGL.so.1`, `libgthread-2.0.so.0`) or a missing `ffmpeg` binary.
+  </Step>
+  <Step title="Build phase — build.sh">
+    The build script installs Python dependencies, collects static assets for WhiteNoise, and applies database migrations:
+
+    ```bash build.sh
+    #!/usr/bin/env bash
+    set -o errexit
+
+    pip install -r requirements.txt
+    python manage.py collectstatic --no-input --clear
+    python manage.py migrate
+    ```
+
+    `--clear` ensures stale assets are removed so WhiteNoise serves only the latest hashed files.
+  </Step>
+  <Step title="Process types — Procfile">
+    The `Procfile` declares the web process and a release-phase migration. Railway runs `release` once per deploy before swapping traffic to the new `web` process:
+
+    ```procfile Procfile
+    web: gunicorn Signia.wsgi --bind 0.0.0.0:$PORT --timeout 120 --log-file -
+    release: python manage.py migrate
+    ```
+
+    The 120-second timeout accommodates long-running inference requests. Running `migrate` in both `build.sh` and the `release` phase is intentional — the release phase guarantees migrations run against the live database even if the build was cached.
+  </Step>
+</Steps>
+
+## Database configuration
+
+The Django settings parse `DATABASE_URL` with `dj-database-url` and add Neon-specific options:
+
+```python Signia/settings.py
+DATABASES = {
+    'default': {
+        **dj_database_url.parse(
+            config('DATABASE_URL'),
+            conn_max_age=0,
+        ),
+        'DISABLE_SERVER_SIDE_CURSORS': True,
+        'OPTIONS': {
+            'sslmode': 'require',
+            'connect_timeout': 10,
+            'keepalives': 1,
+            'keepalives_idle': 30,
+            'keepalives_interval': 5,
+            'keepalives_count': 5,
+        },
+    }
+}
+```
+
+Two settings are required when running against Neon's pooled connections:
+
+- **`sslmode=require`** — Neon only accepts TLS connections. The `OPTIONS` block enforces this regardless of what the URL contains.
+- **`DISABLE_SERVER_SIDE_CURSORS=True`** — Neon's PgBouncer pooler runs in transaction mode and does not support server-side cursors. Without this flag, `QuerySet.iterator()` and large admin pages fail with `InvalidCursorName`.
+
+The TCP keepalive options keep idle connections alive through Railway's edge proxy.
+
+## Static files
+
+WhiteNoise serves static assets directly from the gunicorn process. The middleware is registered immediately after `SecurityMiddleware`, and the storage backend uses `CompressedStaticFilesStorage` (not the manifest variant) so MediaPipe can locate `.wasm` and `.task` files by exact filename:
+
+```python Signia/settings.py
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedStaticFilesStorage"},
+}
+```
+
+`.wasm` and `.task` are excluded from WhiteNoise compression so Chromium range requests succeed.
+
+## Host and CSRF configuration
+
+Railway injects the public hostname into `RAILWAY_PUBLIC_DOMAIN` at runtime. Settings reads this variable and appends it to both `ALLOWED_HOSTS` and `CSRF_TRUSTED_ORIGINS`:
+
+```python Signia/settings.py
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', '.up.railway.app']
+
+railway_domain = config('RAILWAY_PUBLIC_DOMAIN', default='')
+if railway_domain:
+    ALLOWED_HOSTS.append(railway_domain)
+    CSRF_TRUSTED_ORIGINS = [f'https://{railway_domain}']
+
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+```
+
+`SECURE_PROXY_SSL_HEADER` tells Django to trust the `X-Forwarded-Proto` header set by Railway's edge proxy. Without it, OAuth redirects fail with `redirect_uri_mismatch` because Django generates `http://` callback URLs while Google expects `https://`.
+
+If you attach a custom domain in Railway, no settings change is required — Railway updates `RAILWAY_PUBLIC_DOMAIN` automatically.
+
+## Required environment variables
+
+Set the following variables in the Railway service before the first deploy:
+
+| Variable | Required | Description |
+| --- | --- | --- |
+| `DATABASE_URL` | Yes | Neon PostgreSQL connection string. Format: `postgresql://USER:PASSWORD@HOST/DB?sslmode=require`. |
+| `SECRET_KEY` | Yes | Django secret key. Generate a long random value; do not reuse the fallback. |
+| `DEBUG` | No | Defaults to `False`. Leave unset in production. |
+| `RAILWAY_PUBLIC_DOMAIN` | Auto | Injected by Railway. Do not set manually. |
+| `SITE_ID` | No | Django sites framework ID. Defaults to `1`. |
+| `BREVO_API_KEY` | Yes | API key for the Brevo transactional email backend. |
+| `EMAIL_HOST` | No | SMTP host. Defaults to `smtp-relay.brevo.com`. |
+| `EMAIL_HOST_USER` | Yes | SMTP username from Brevo. |
+| `EMAIL_HOST_PASSWORD` | Yes | SMTP password from Brevo. |
+| `GROQ_API_KEY` | Yes | API key for the Groq-powered LSC grammar layer. |
+
+OAuth providers (Google, Facebook) are configured through the Django admin under **Social applications**, not via environment variables.
+
+## Deploy
+
+<Steps>
+  <Step title="Connect the repository">
+    In Railway, create a new project and link it to the application's GitHub repository. Railway detects Nixpacks automatically.
+  </Step>
+  <Step title="Add a PostgreSQL database">
+    Provision a Neon database (or use Railway's managed PostgreSQL). Copy the connection string and set `DATABASE_URL` in the service's **Variables** tab. Append `?sslmode=require` if your provider does not include it.
+  </Step>
+  <Step title="Set environment variables">
+    Add every variable from the table above. Railway redeploys automatically when variables change.
+  </Step>
+  <Step title="Trigger the first deploy">
+    Push to the default branch or click **Deploy** in the Railway dashboard. Watch the build logs for the `pip install`, `collectstatic`, and `migrate` steps, then the release-phase `migrate`, then `gunicorn` startup.
+  </Step>
+  <Step title="Verify">
+    Open the Railway-provided URL. Confirm that static assets load (WhiteNoise), the admin login renders, and OAuth callbacks redirect over HTTPS.
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+- **`DisallowedHost` errors** — Confirm `RAILWAY_PUBLIC_DOMAIN` is set. If you are using a custom domain that Railway has not yet propagated, add it to `ALLOWED_HOSTS` manually.
+- **`redirect_uri_mismatch` on Google login** — Ensure `SECURE_PROXY_SSL_HEADER` is active and the Google OAuth client lists the `https://` Railway URL as an authorized redirect URI.
+- **`InvalidCursorName` from the admin** — Verify `DISABLE_SERVER_SIDE_CURSORS=True` is present in the database options. This is required for Neon's pooled endpoint.
+- **`libGL.so.1: cannot open shared object file`** — `nixpacks.toml` is missing or did not run. Confirm the file is at the repo root and that the build logs show the `setup` phase installing `libgl1`.
+- **WASM range request failures** — `.wasm` must be excluded from WhiteNoise compression. This is configured via `WHITENOISE_SKIP_COMPRESS_EXTENSIONS`.
