@@ -47,6 +47,14 @@ Under the hood, Signia combines several open-source building blocks:
 - **scikit-learn RandomForest** for classifying landmark sequences into Spanish words, retrained from sign videos uploaded through the admin panel.
 - **PostgreSQL (Neon)** for users, sign-video metadata, and history.
 
+## Operating Signia
+
+Signia is designed to run as a long-lived web service:
+
+- **Health checks** — Signia exposes an unauthenticated `GET /health/` endpoint that returns `{"status": "ok"}`. Point your platform's health probe at it so deployments and restarts are gated on the app actually being up.
+- **Structured logging** — application logs are emitted to stdout with a `[LEVEL] timestamp module: message` format. The default level is `WARNING`; set the `DJANGO_LOG_LEVEL` environment variable (for example, `INFO` or `DEBUG`) to get more detail without code changes.
+- **Outbound email identity** — the "from" address on transactional email is built from the `ADMIN_EMAIL` environment variable (default: `admin@signia.app`). Set this to a mailbox you control before sending OTP codes or contact-form replies from a real deployment.
+
 ## Where to go next
 
 <CardGroup cols={2}>
