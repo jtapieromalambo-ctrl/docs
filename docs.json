@@ -16,6 +16,12 @@
           "index",
           "quickstart"
         ]
+      },
+      {
+        "group": "Authentication",
+        "pages": [
+          "authentication/google-oauth"
+        ]
       }
     ],
     "global": {

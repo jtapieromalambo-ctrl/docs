@@ -1,0 +1,136 @@
+---
+title: "Sign in with Google"
+description: "Let users sign in to Signia with their Google account using django-allauth."
+---
+
+Signia supports signing in with Google through [django-allauth](https://docs.allauth.org/). End users get a one-click sign-in button on the login screen, and new accounts are provisioned automatically on first sign-in.
+
+## How it works for end users
+
+A **Continue with Google** button appears on the home and login screen alongside the email and password form.
+
+1. The user clicks **Continue with Google**.
+2. Google prompts them to choose an account (`prompt=select_account`) and grant the `profile` and `email` scopes.
+3. On success they are redirected to `/seleccionar-discapacidad/` — the same destination as a normal login.
+
+If the Google account email is not already linked to a Signia user, an account is created automatically. No additional sign-up form is shown.
+
+<Info>
+  The flow uses `SOCIALACCOUNT_LOGIN_ON_GET = True`, so the Google consent screen opens directly when the button is clicked — there is no intermediate confirmation page.
+</Info>
+
+## Operator setup
+
+### 1. Create a Google OAuth client
+
+In the [Google Cloud Console](https://console.cloud.google.com/apis/credentials), create an **OAuth 2.0 Client ID** of type **Web application** and add the following authorized redirect URI:
+
+```
+https://<your-domain>/accounts/google/login/callback/
+```
+
+Copy the generated client ID and client secret.
+
+### 2. Set environment variables
+
+| Variable | Required | Description |
+| --- | --- | --- |
+| `GOOGLE_CLIENT_ID` | yes | OAuth 2.0 client ID from Google Cloud. |
+| `GOOGLE_CLIENT_SECRET` | yes | OAuth 2.0 client secret from Google Cloud. |
+| `SITE_DOMAIN` | yes | Public domain registered in `django.contrib.sites` (for example `www.signia.click`). Must match the domain Google is configured to redirect to. |
+| `SITE_ID` | no | Primary key of the `Site` row used by allauth. Defaults to `1`. |
+| `RAILWAY_PUBLIC_DOMAIN` | no | Set automatically by Railway. When present it is appended to `ALLOWED_HOSTS` and `CSRF_TRUSTED_ORIGINS`. |
+
+### 3. Provision the Site and SocialApp
+
+allauth needs a `Site` row and a `SocialApp` row that point at your Google credentials. Signia ships a management command that does this from the environment variables above:
+
+```bash
+python manage.py setup_oauth
+```
+
+The command:
+
+- Creates or updates the `django.contrib.sites.Site` row for `SITE_ID` with `domain = SITE_DOMAIN` and `name = "Signia"`.
+- Creates or updates the Google `SocialApp` with the configured `client_id` and `secret`.
+- Attaches the `SocialApp` to the `Site`.
+
+If `GOOGLE_CLIENT_ID` or `GOOGLE_CLIENT_SECRET` is missing the command logs an error and exits without making changes.
+
+<Tip>
+  On Railway the command runs automatically as part of the release phase, so you do not need to run it manually after deploying. The release step also runs `collectstatic` and `migrate`.
+</Tip>
+
+### 4. Verify the sign-in button
+
+After deploying, open the login page and confirm the **Continue with Google** button takes you through Google's consent screen and back to `/seleccionar-discapacidad/`.
+
+## Settings reference
+
+The Google provider is wired up in `SOCIALACCOUNT_PROVIDERS`:
+
+```python
+SOCIALACCOUNT_PROVIDERS = {
+    "google": {
+        "APP": {
+            "client_id": config("GOOGLE_CLIENT_ID", default=""),
+            "secret": config("GOOGLE_CLIENT_SECRET", default=""),
+            "key": "",
+        },
+        "SCOPE": ["profile", "email"],
+        "AUTH_PARAMS": {
+            "access_type": "online",
+            "prompt": "select_account",
+        },
+        "VERIFIED_EMAIL": True,
+    },
+}
+
+SOCIALACCOUNT_LOGIN_ON_GET = True
+SOCIALACCOUNT_AUTO_SIGNUP = True
+ACCOUNT_SIGNUP_REDIRECT_URL = "/seleccionar-discapacidad/"
+LOGIN_REDIRECT_URL = "/seleccionar-discapacidad/"
+```
+
+Key behaviors:
+
+- **`VERIFIED_EMAIL: True`** — emails returned by Google are treated as already verified, so users skip the email confirmation step.
+- **`SOCIALACCOUNT_LOGIN_ON_GET`** — clicking the Google link starts the OAuth handshake immediately instead of rendering an intermediate page.
+- **`SOCIALACCOUNT_AUTO_SIGNUP`** — first-time Google users are created automatically; no sign-up form is shown.
+
+## Repair migration
+
+A data migration, `usuarios/0014_fix_google_socialapp`, runs on deploy to keep the `SocialApp` table healthy:
+
+- Deletes duplicate Google `SocialApp` rows, keeping the oldest.
+- Updates the remaining row's `client_id` and `secret` from `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`.
+- Creates a Google `SocialApp` if none exists and credentials are available.
+
+You only need to know it exists if you are debugging a `MultipleObjectsReturned` or missing-app error from allauth — the migration is the safety net that resolves both.
+
+## Railway hosting notes
+
+The same release that introduced Google sign-in also tightened the Railway deployment:
+
+- `ALLOWED_HOSTS` contains the project's Railway host `ycg31qz6.up.railway.app` plus the wildcard `*.up.railway.app`. If `RAILWAY_PUBLIC_DOMAIN` is set, it is appended at runtime.
+- `CSRF_TRUSTED_ORIGINS` includes `https://ycg31qz6.up.railway.app` and the production domains, and is extended at runtime with `https://<RAILWAY_PUBLIC_DOMAIN>` when that variable is present.
+- When `DEBUG` is `False` the app enables `SECURE_SSL_REDIRECT`, `SESSION_COOKIE_SECURE`, and `CSRF_COOKIE_SECURE`. Combined with `SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")`, this forces HTTPS behind Railway's proxy.
+
+If you host Signia somewhere other than Railway, add your domain to `ALLOWED_HOSTS` and `CSRF_TRUSTED_ORIGINS` (or expose it via `RAILWAY_PUBLIC_DOMAIN`) and make sure the Google OAuth redirect URI matches.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="The Continue with Google button returns a 500 error">
+    Run `python manage.py setup_oauth` and confirm `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `SITE_DOMAIN` are set. The command's output should end with `OAuth configurado correctamente`.
+  </Accordion>
+  <Accordion title="Google reports a redirect_uri_mismatch">
+    The redirect URI registered in Google Cloud must exactly match `https://<SITE_DOMAIN>/accounts/google/login/callback/`. Update either the Google OAuth client or `SITE_DOMAIN` so they agree.
+  </Accordion>
+  <Accordion title="CSRF verification failed on the callback">
+    Add the host serving the callback to `CSRF_TRUSTED_ORIGINS`. On Railway, setting `RAILWAY_PUBLIC_DOMAIN` is usually enough; for custom domains add the `https://` origin explicitly.
+  </Accordion>
+  <Accordion title="DisallowedHost: Invalid HTTP_HOST header">
+    Add the host to `ALLOWED_HOSTS`. The default list already covers `signia.click`, `www.signia.click`, `*.up.railway.app`, and `*.onrender.com`.
+  </Accordion>
+</AccordionGroup>
