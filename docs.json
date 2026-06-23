@@ -16,6 +16,12 @@
           "index",
           "quickstart"
         ]
+      },
+      {
+        "group": "Features",
+        "pages": [
+          "features/translator"
+        ]
       }
     ],
     "global": {
