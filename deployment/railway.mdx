@@ -120,6 +120,44 @@ SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 If you attach a custom domain in Railway, no settings change is required — Railway updates `RAILWAY_PUBLIC_DOMAIN` automatically.
 
+## Logging
+
+Production logging is configured through Django's `LOGGING` dictionary and streams to stdout so Railway captures it in the service logs. The root logger defaults to `WARNING`; application loggers (`usuarios`, `reconocimientos`) run at `INFO`; the `django` logger level is controlled by an environment variable:
+
+```python Signia/settings.py
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {'class': 'logging.StreamHandler', 'formatter': 'verbose'},
+    },
+    'root': {'handlers': ['console'], 'level': 'WARNING'},
+    'loggers': {
+        'django': {
+            'handlers': ['console'],
+            'level': config('DJANGO_LOG_LEVEL', default='WARNING'),
+            'propagate': False,
+        },
+        'usuarios':       {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
+        'reconocimientos':{'handlers': ['console'], 'level': 'INFO', 'propagate': False},
+    },
+}
+```
+
+Set `DJANGO_LOG_LEVEL=DEBUG` temporarily in the Railway dashboard when you need to capture request-level Django output (for example, while debugging a 500 in production). Revert it to `WARNING` afterwards to keep log volume manageable.
+
+## Admin email
+
+Notifications and the `DEFAULT_FROM_EMAIL` sender are derived from a single `ADMIN_EMAIL` variable:
+
+```python Signia/settings.py
+_admin_email = config('ADMIN_EMAIL', default='admin@signia.app')
+DEFAULT_FROM_EMAIL = f'Signia <{_admin_email}>'
+ADMIN_EMAIL = _admin_email
+```
+
+Set `ADMIN_EMAIL` to the mailbox you want users to see in the `From:` header and that internal notifications should be sent to. The address must be verified in Brevo, otherwise outbound mail is rejected.
+
 ## Required environment variables
 
 Set the following variables in the Railway service before the first deploy:
@@ -131,11 +169,13 @@ Set the following variables in the Railway service before the first deploy:
 | `DEBUG` | No | Defaults to `False`. Leave unset in production. |
 | `RAILWAY_PUBLIC_DOMAIN` | Auto | Injected by Railway. Do not set manually. |
 | `SITE_ID` | No | Django sites framework ID. Defaults to `1`. |
+| `ADMIN_EMAIL` | Yes | Sender address used in `DEFAULT_FROM_EMAIL` and for admin notifications. Must be verified in Brevo. |
 | `BREVO_API_KEY` | Yes | API key for the Brevo transactional email backend. |
 | `EMAIL_HOST` | No | SMTP host. Defaults to `smtp-relay.brevo.com`. |
 | `EMAIL_HOST_USER` | Yes | SMTP username from Brevo. |
 | `EMAIL_HOST_PASSWORD` | Yes | SMTP password from Brevo. |
 | `GROQ_API_KEY` | Yes | API key for the Groq-powered LSC grammar layer. |
+| `DJANGO_LOG_LEVEL` | No | Log level for the `django` logger. Defaults to `WARNING`; set to `DEBUG` or `INFO` for verbose output. |
 
 OAuth providers (Google, Facebook) are configured through the Django admin under **Social applications**, not via environment variables.
 
@@ -166,3 +206,5 @@ OAuth providers (Google, Facebook) are configured through the Django admin under
 - **`InvalidCursorName` from the admin** — Verify `DISABLE_SERVER_SIDE_CURSORS=True` is present in the database options. This is required for Neon's pooled endpoint.
 - **`libGL.so.1: cannot open shared object file`** — `nixpacks.toml` is missing or did not run. Confirm the file is at the repo root and that the build logs show the `setup` phase installing `libgl1`.
 - **WASM range request failures** — `.wasm` must be excluded from WhiteNoise compression. This is configured via `WHITENOISE_SKIP_COMPRESS_EXTENSIONS`.
+- **Outbound email silently dropped** — Brevo rejects mail from unverified senders. Confirm `ADMIN_EMAIL` matches a verified sender identity in your Brevo account.
+- **Too little or too much log output** — Adjust `DJANGO_LOG_LEVEL` in the Railway variables. `WARNING` is the production default; raise to `INFO` or `DEBUG` only while investigating an issue.
