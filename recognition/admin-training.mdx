@@ -17,7 +17,9 @@ admin video panel by uploading short sample videos of each sign and clicking
 
 ## Prerequisites
 
-- A Django superuser account.
+- A Django superuser account. Every admin endpoint — upload, edit, delete,
+  train, status, and signs-trained — is gated on `is_superuser` server-side;
+  regular users get an HTTP `403` from the API and a redirect from the UI.
 - Short clips (a few seconds each) of a single person performing one sign
   per video, recorded against a reasonably clean background.
 - Enough memory and CPU on the server to run MediaPipe and fit a 500-tree
@@ -49,6 +51,20 @@ For each sign you want the model to learn:
   </Step>
 </Steps>
 
+### Accepted file types and limits
+
+Uploaded videos are validated server-side before they reach the database:
+
+| Check       | Constraint                                                                   |
+| ----------- | ---------------------------------------------------------------------------- |
+| File size   | Up to **100 MB** per video                                                   |
+| MIME type   | `video/mp4`, `video/webm`, `video/ogg`, `video/quicktime`, `video/x-msvideo` |
+
+Anything outside these limits is rejected with an HTTP `400` and a message
+explaining which check failed — no row is created and no file is written to
+disk. The same validation applies to videos uploaded to the translator
+catalog.
+
 ## Run training
 
 Click **Entrenar** in the admin panel. The server responds immediately
@@ -64,11 +80,12 @@ Poll the status endpoint to know when it finishes:
 
 ```json
 GET /reconocimientos/admin-videos/entrenar/estado/
-→ { "entrenando": true }
+→ { "activo": true }
 ```
 
-While `entrenando` is `true`, a second click on **Entrenar** is rejected so
-two training jobs never run in parallel.
+While `activo` is `true`, a second click on **Entrenar** is rejected so two
+training jobs never run in parallel. The check is guarded by a lock, so
+concurrent admin requests are safe.
 
 ### What happens during training
 
