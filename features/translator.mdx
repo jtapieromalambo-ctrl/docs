@@ -20,6 +20,8 @@ After login, Signia routes users based on the disability declared on their profi
 
 If a user has not chosen a profile option yet, they are first sent to `/seleccionar-discapacidad/` and then routed accordingly.
 
+The public landing page also previews the sign catalog used by the translator, so visitors can browse the available signs before signing in.
+
 ## Input modes
 
 The translator accepts two kinds of input on the same page:
@@ -89,3 +91,13 @@ When a token has no matching clip in the catalog, it is surfaced in the response
 - **`record`** — the sign is missing entirely and should be recorded to expand the catalog.
 
 The page exposes the full list of LSC tokens, per-token resolution info (which video was used, original vs. used token, strategy applied), and the raw `faltantes` list so administrators can prioritize new recordings.
+
+## Managing the sign catalog
+
+The translator's accuracy depends on the sign catalog. Admin accounts can add, rename, or remove signs from the catalog through the admin panel. Uploads are validated before they are saved:
+
+- **Size** — files larger than 100 MB are rejected.
+- **Format** — only `video/mp4`, `video/webm`, `video/ogg`, `video/quicktime`, and `video/x-msvideo` are accepted.
+- **Uniqueness** — sign names must be unique (case-insensitive), so re-uploading an existing sign requires editing the existing entry instead of creating a duplicate.
+
+Catalog create, edit, and delete endpoints require an authenticated superuser; non-admin requests are rejected. Use the missing-sign list from real translations to decide what to record next.
