@@ -1,47 +1,77 @@
 ---
 title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+description: "Run Signia locally with SQLite in under ten minutes."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
+This quickstart gets a Signia development server running against SQLite, with the bundled `ffmpeg` binaries and the minimum set of environment variables. For a full walkthrough — PostgreSQL, OAuth, email, and production gotchas — see [Local installation](/installation).
 
 ## Prerequisites
 
 Before you begin, you must have:
 
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
+- **Python 3.11** with `pip` 23 or newer.
+- **Git**.
+- A **Groq API key** from [console.groq.com](https://console.groq.com) for the LSC grammar layer.
+
+`ffmpeg` is required for audio transcription, but the repository ships native binaries under `ffmpeg/` and the translator adds that directory to `PATH` at runtime. You only need to install `ffmpeg` system-wide if you remove that folder.
 
 ## Get started
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
-
+  <Step title="Clone the repository">
     ```bash
-    npm install your-package
+    git clone <repository-url>
+    cd SIGNIA
     ```
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+  <Step title="Create and activate a virtual environment">
+    **Linux / macOS:**
 
     ```bash
-    your-cli init
+    python3.11 -m venv ENT
+    source ENT/bin/activate
+    ```
+
+    **Windows (PowerShell):**
+
+    ```powershell
+    python -m venv ENT
+    .\ENT\Scripts\Activate.ps1
     ```
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+  <Step title="Install dependencies">
+    ```bash
+    pip install -r requirements.txt
+    ```
+  </Step>
+  <Step title="Create a minimal .env file">
+    Create `.env` next to `manage.py` with the smallest set of variables needed to boot:
+
+    ```env
+    SECRET_KEY=replace-with-a-long-random-string
+    DEBUG=True
+    GROQ_API_KEY=your-groq-api-key
+    ```
+
+    Omit `DATABASE_URL` to fall back to the bundled `db.sqlite3` automatically.
+
+    Generate a `SECRET_KEY` with:
 
     ```bash
-    your-cli start
+    python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
     ```
+  </Step>
+  <Step title="Apply migrations and run the server">
+    ```bash
+    python manage.py migrate
+    python manage.py runserver
+    ```
+
+    Visit [http://127.0.0.1:8000](http://127.0.0.1:8000).
   </Step>
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+## Next steps
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+- Create a superuser with `python manage.py createsuperuser` so you can access the video admin at `/admin-videos/` and train the recognition model.
+- Read [Local installation](/installation) to configure PostgreSQL, email (Brevo), OAuth, and `collectstatic` for a production-like setup.
