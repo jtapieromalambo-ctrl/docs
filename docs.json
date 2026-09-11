@@ -16,6 +16,13 @@
           "index",
           "quickstart"
         ]
+      },
+      {
+        "group": "Sign recognition",
+        "pages": [
+          "recognition/overview",
+          "recognition/admin-training"
+        ]
       }
     ],
     "global": {
